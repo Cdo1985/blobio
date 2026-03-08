@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Blob.io</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0d0d0d; overflow:hidden; font-family:'Segoe UI',sans-serif; }
+  canvas { display:block; }
+  #hud { position:fixed; top:12px; left:12px; z-index:10; pointer-events:none; }
+  #hud .val { font-size:22px; font-weight:800; color:#fff; text-shadow:0 0 10px rgba(255,255,255,0.3); }
+  #hud .lbl { font-size:11px; color:#555; text-transform:uppercase; letter-spacing:1px; }
+  #leaderboard { position:fixed; top:12px; right:12px; z-index:10; background:rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.07); border-radius:8px; padding:10px 14px; min-width:140px; }
+  #leaderboard h3 { font-size:11px; color:#555; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
+  #lb-list { font-size:13px; color:#ccc; line-height:22px; }
+  #overlay { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; background:rgba(13,13,13,0.95); z-index:20; }
+  #overlay h1 { font-size:56px; font-weight:900; background:linear-gradient(135deg,#4ade80,#22d3ee); -webkit-background-clip:text; -webkit-text-fill-color:transparent; margin-bottom:6px; }
+  #overlay p { color:#444; font-size:14px; margin-bottom:28px; }
+  #name-input { background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); color:#fff; padding:10px 18px; border-radius:8px; font-size:15px; outline:none; margin-bottom:14px; width:240px; text-align:center; }
+  #play-btn { padding:12px 44px; background:linear-gradient(135deg,#4ade80,#22d3ee); color:#000; border:none; border-radius:10px; font-size:16px; font-weight:800; cursor:pointer; }
+  #play-btn:hover { opacity:0.9; }
+  #death-msg { color:#f87171; font-size:18px; margin-bottom:8px; display:none; }
+  #death-info { color:#555; font-size:13px; margin-bottom:20px; display:none; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <div class="lbl">MASS</div>
+  <div class="val" id="mass-val">10</div>
+</div>
+<div id="leaderboard">
+  <h3>Leaderboard</h3>
+  <div id="lb-list"></div>
+</div>
+<canvas id="c"></canvas>
+<div id="overlay">
+  <div id="death-msg"></div>
+  <div id="death-info"></div>
+  <h1>BLOB.IO</h1>
+  <p>Eat smaller blobs. Avoid bigger ones.</p>
+  <input id="name-input" placeholder="Enter your name..." maxlength="16" />
+  <button id="play-btn" onclick="startGame()">PLAY</button>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W = canvas.width = window.innerWidth;
+let H = canvas.height = window.innerHeight;
+window.addEventListener('resize', () => { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; });
+
+// World size
+const WORLD = 3000;
+const CELL_SIZE = 120;
+
+// Food
+let foods = [];
+const FOOD_COUNT = 600;
+const FOOD_COLORS = ['#4ade80','#22d3ee','#f472b6','#fb923c','#a78bfa','#facc15','#f87171'];
+
+// Blobs (AI + player)
+let blobs = [];
+let player = null;
+let mouse = { x: W/2, y: H/2 };
+let running = false;
+let frameCount = 0;
+let camera = { x: 0, y: 0, scale: 1 };
+
+const BOT_NAMES = ['Zephyr','Nova','Kairo','Lyra','Orion','Vex','Mira','Drax','Flux','Sable','Echo','Pyro','Volt','Nyx','Axon'];
+const BOT_COLORS = ['#4ade80','#22d3ee','#f472b6','#fb923c','#a78bfa','#facc15','#f87171','#e879f9','#2dd4bf','#fbbf24'];
+
+function randColor() { return BOT_COLORS[Math.floor(Math.random()*BOT_COLORS.length)]; }
+function randName() { return BOT_NAMES[Math.floor(Math.random()*BOT_NAMES.length)]; }
+
+function massToRadius(m) { return Math.sqrt(m) * 4; }
+
+function spawnFood() {
+  while(foods.length < FOOD_COUNT) {
+    foods.push({
+      x: Math.random()*WORLD, y: Math.random()*WORLD,
+      r: 5 + Math.random()*4,
+      color: FOOD_COLORS[Math.floor(Math.random()*FOOD_COLORS.length)],
+      pulse: Math.random()*Math.PI*2
+    });
+  }
+}
+
+function spawnBot(mass=null) {
+  const m = mass || (10 + Math.random()*80);
+  const col = randColor();
+  return {
+    x: Math.random()*WORLD, y: Math.random()*WORLD,
+    mass: m, r: massToRadius(m),
+    color: col,
+    name: randName(),
+    vx: 0, vy: 0,
+    isPlayer: false,
+    targetX: Math.random()*WORLD, targetY: Math.random()*WORLD,
+    thinkTimer: 0,
+    id: Math.random()
+  };
+}
+
+function startGame() {
+  const name = document.getElementById('name-input').value.trim() || 'You';
+  document.getElementById('overlay').style.display = 'none';
+  document.getElementById('death-msg').style.display = 'none';
+  document.getElementById('death-info').style.display = 'none';
+
+  foods = [];
+  spawnFood();
+
+  blobs = [];
+  for(let i=0;i<20;i++) blobs.push(spawnBot());
+
+  player = {
+    x: WORLD/2, y: WORLD/2,
+    mass: 10, r: massToRadius(10),
+    color: '#4ade80',
+    name: name,
+    vx: 0, vy: 0,
+    isPlayer: true,
+    id: 'player'
+  };
+  blobs.push(player);
+  running = true;
+  frameCount = 0;
+  loop();
+}
+
+// Spatial grid for perf
+function getCell(x,y) { return `${Math.floor(x/CELL_SIZE)},${Math.floor(y/CELL_SIZE)}`; }
+let foodGrid = {};
+function buildFoodGrid() {
+  foodGrid = {};
+  for(let f of foods) {
+    const k = getCell(f.x,f.y);
+    if(!foodGrid[k]) foodGrid[k] = [];
+    foodGrid[k].push(f);
+  }
+}
+
+function nearbyFoods(x,y,range) {
+  const cx = Math.floor(x/CELL_SIZE), cy = Math.floor(y/CELL_SIZE);
+  const cells = Math.ceil(range/CELL_SIZE)+1;
+  let result = [];
+  for(let dx=-cells;dx<=cells;dx++)
+    for(let dy=-cells;dy<=cells;dy++) {
+      const k = `${cx+dx},${cy+dy}`;
+      if(foodGrid[k]) result.push(...foodGrid[k]);
+    }
+  return result;
+}
+
+function updateCamera() {
+  const target = player;
+  const targetScale = Math.max(0.3, Math.min(1.2, 800/target.r/4));
+  camera.scale += (targetScale - camera.scale)*0.05;
+  camera.x += (target.x - camera.x)*0.08;
+  camera.y += (target.y - camera.y)*0.08;
+}
+
+function updatePlayer() {
+  const p = player;
+  // Direction toward mouse (world coords)
+  const wx = (mouse.x - W/2)/camera.scale + camera.x;
+  const wy = (mouse.y - H/2)/camera.scale + camera.y;
+  const dx = wx - p.x, dy = wy - p.y;
+  const dist = Math.hypot(dx,dy);
+  if(dist > 1) {
+    const spd = Math.max(1.5, 6 - p.r*0.04);
+    p.vx += (dx/dist)*spd*0.3;
+    p.vy += (dy/dist)*spd*0.3;
+  }
+  p.vx *= 0.8; p.vy *= 0.8;
+  p.x = Math.max(p.r, Math.min(WORLD-p.r, p.x+p.vx));
+  p.y = Math.max(p.r, Math.min(WORLD-p.r, p.y+p.vy));
+}
+
+function updateBot(b) {
+  b.thinkTimer--;
+  if(b.thinkTimer <= 0) {
+    b.thinkTimer = 30 + Math.random()*30;
+    // Find nearby food or smaller blobs
+    let best = null, bestScore = -Infinity;
+    const nearby = nearbyFoods(b.x,b.y,300);
+    for(let f of nearby) {
+      const d = Math.hypot(f.x-b.x,f.y-b.y);
+      const score = 10/d;
+      if(score>bestScore){bestScore=score;best={x:f.x,y:f.y};}
+    }
+    // Chase smaller blobs
+    for(let o of blobs) {
+      if(o===b||!o.isPlayer&&o.mass>=b.mass*0.7) continue;
+      if(o.mass < b.mass*0.85) {
+        const d = Math.hypot(o.x-b.x,o.y-b.y);
+        const score = (b.mass-o.mass)/d * 2;
+        if(score>bestScore){bestScore=score;best={x:o.x,y:o.y};}
+      }
+    }
+    // Flee bigger blobs
+    for(let o of blobs) {
+      if(o===b) continue;
+      if(o.mass > b.mass*1.15) {
+        const d = Math.hypot(o.x-b.x,o.y-b.y);
+        if(d < 250) { best={x:b.x-(o.x-b.x)*3,y:b.y-(o.y-b.y)*3}; break; }
+      }
+    }
+    if(best) { b.targetX=best.x; b.targetY=best.y; }
+    else { b.targetX=Math.random()*WORLD; b.targetY=Math.random()*WORLD; }
+  }
+
+  const dx=b.targetX-b.x, dy=b.targetY-b.y, d=Math.hypot(dx,dy);
+  if(d>1){
+    const spd=Math.max(1.2,5-b.r*0.03);
+    b.vx+=(dx/d)*spd*0.3; b.vy+=(dy/d)*spd*0.3;
+  }
+  b.vx*=0.8; b.vy*=0.8;
+  b.x=Math.max(b.r,Math.min(WORLD-b.r,b.x+b.vx));
+  b.y=Math.max(b.r,Math.min(WORLD-b.r,b.y+b.vy));
+}
+
+function eatFood() {
+  const eaten = new Set();
+  for(let b of blobs) {
+    const near = nearbyFoods(b.x,b.y,b.r+10);
+    for(let f of near) {
+      if(eaten.has(f)) continue;
+      const d = Math.hypot(f.x-b.x,f.y-b.y);
+      if(d < b.r) {
+        b.mass += 0.5;
+        b.r = massToRadius(b.mass);
+        eaten.add(f);
+      }
+    }
+  }
+  foods = foods.filter(f=>!eaten.has(f));
+}
+
+function eatBlobs() {
+  const dead = new Set();
+  for(let a of blobs) {
+    if(dead.has(a)) continue;
+    for(let b of blobs) {
+      if(a===b||dead.has(b)) continue;
+      if(a.mass < b.mass*1.15) continue;
+      const d = Math.hypot(a.x-b.x,a.y-b.y);
+      if(d < a.r - b.r*0.4) {
+        a.mass += b.mass*0.8;
+        a.r = massToRadius(a.mass);
+        dead.add(b);
+        if(b.isPlayer) {
+          // Player eaten
+          running = false;
+          setTimeout(()=>{
+            document.getElementById('death-msg').textContent = `Eaten by ${a.name}!`;
+            document.getElementById('death-msg').style.display='block';
+            document.getElementById('death-info').textContent = `Final mass: ${Math.floor(player.mass)}`;
+            document.getElementById('death-info').style.display='block';
+            document.getElementById('overlay').style.display='flex';
+            document.getElementById('play-btn').textContent='PLAY AGAIN';
+          },600);
+        }
+      }
+    }
+  }
+  blobs = blobs.filter(b=>!dead.has(b));
+  // Respawn bots
+  while(blobs.filter(b=>!b.isPlayer).length < 19) blobs.push(spawnBot());
+}
+
+function drawWorld() {
+  ctx.save();
+  ctx.translate(W/2, H/2);
+  ctx.scale(camera.scale, camera.scale);
+  ctx.translate(-camera.x, -camera.y);
+
+  // Background grid
+  const gridSize = 60;
+  const startX = Math.floor((camera.x-W/camera.scale/2)/gridSize)*gridSize;
+  const startY = Math.floor((camera.y-H/camera.scale/2)/gridSize)*gridSize;
+  ctx.strokeStyle='rgba(255,255,255,0.04)'; ctx.lineWidth=1;
+  for(let x=startX;x<startX+W/camera.scale+gridSize*2;x+=gridSize){
+    ctx.beginPath();ctx.moveTo(x,startY);ctx.lineTo(x,startY+H/camera.scale+gridSize*2);ctx.stroke();
+  }
+  for(let y=startY;y<startY+H/camera.scale+gridSize*2;y+=gridSize){
+    ctx.beginPath();ctx.moveTo(startX,y);ctx.lineTo(startX+W/camera.scale+gridSize*2,y);ctx.stroke();
+  }
+
+  // World border
+  ctx.strokeStyle='rgba(255,255,255,0.15)'; ctx.lineWidth=6;
+  ctx.strokeRect(0,0,WORLD,WORLD);
+
+  // Food
+  const t=frameCount*0.05;
+  for(let f of foods) {
+    const pr=f.r*(0.85+0.15*Math.sin(t+f.pulse));
+    ctx.fillStyle=f.color;
+    ctx.shadowColor=f.color; ctx.shadowBlur=8;
+    ctx.beginPath();ctx.arc(f.x,f.y,pr,0,Math.PI*2);ctx.fill();
+  }
+  ctx.shadowBlur=0;
+
+  // Blobs (sort by mass so smaller render on top)
+  const sorted=[...blobs].sort((a,b)=>b.mass-a.mass);
+  for(let b of sorted) {
+    // Glow
+    ctx.shadowColor=b.color; ctx.shadowBlur=b.isPlayer?25:15;
+    // Body
+    const g=ctx.createRadialGradient(b.x-b.r*0.3,b.y-b.r*0.35,b.r*0.1,b.x,b.y,b.r);
+    g.addColorStop(0,lighten(b.color,60));
+    g.addColorStop(0.6,b.color);
+    g.addColorStop(1,darken(b.color,40));
+    ctx.fillStyle=g;
+    ctx.beginPath();ctx.arc(b.x,b.y,b.r,0,Math.PI*2);ctx.fill();
+    // Outline
+    ctx.strokeStyle=darken(b.color,30); ctx.lineWidth=b.isPlayer?3:2;
+    ctx.stroke();
+    ctx.shadowBlur=0;
+    // Name + mass
+    if(b.r>10) {
+      const fs=Math.max(10,Math.min(b.r*0.4,24));
+      ctx.fillStyle='rgba(0,0,0,0.7)';
+      ctx.font=`bold ${fs}px Segoe UI`;
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(b.name,b.x+1,b.y+1);
+      ctx.fillStyle='#fff';
+      ctx.fillText(b.name,b.x,b.y);
+      if(b.r>20){
+        const ms=Math.max(8,fs*0.65);
+        ctx.font=`${ms}px Segoe UI`;
+        ctx.fillStyle='rgba(255,255,255,0.7)';
+        ctx.fillText(Math.floor(b.mass),b.x,b.y+fs*0.7);
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function lighten(hex,amt) {
+  const n=parseInt(hex.slice(1),16);
+  const r=Math.min(255,(n>>16)+amt), g=Math.min(255,((n>>8)&0xff)+amt), b=Math.min(255,(n&0xff)+amt);
+  return `rgb(${r},${g},${b})`;
+}
+function darken(hex,amt) {
+  const n=parseInt(hex.slice(1),16);
+  const r=Math.max(0,(n>>16)-amt), g=Math.max(0,((n>>8)&0xff)-amt), b=Math.max(0,(n&0xff)-amt);
+  return `rgb(${r},${g},${b})`;
+}
+
+function updateLeaderboard() {
+  if(frameCount%30!==0) return;
+  const sorted=[...blobs].sort((a,b)=>b.mass-a.mass).slice(0,8);
+  let html='';
+  sorted.forEach((b,i)=>{
+    const isP=b.isPlayer;
+    html+=`<div style="color:${isP?'#4ade80':'#aaa'};font-weight:${isP?700:400}">${i+1}. ${b.name} <span style="color:#555;font-size:11px">${Math.floor(b.mass)}</span></div>`;
+  });
+  document.getElementById('lb-list').innerHTML=html;
+}
+
+function updateHUD() {
+  document.getElementById('mass-val').textContent = Math.floor(player.mass);
+}
+
+function loop() {
+  if(!running) return;
+  frameCount++;
+  buildFoodGrid();
+  spawnFood();
+
+  updatePlayer();
+  for(let b of blobs) if(!b.isPlayer) updateBot(b);
+  eatFood();
+  eatBlobs();
+  updateCamera();
+
+  // Draw
+  ctx.fillStyle='#0d0d0d';
+  ctx.fillRect(0,0,W,H);
+  drawWorld();
+  updateLeaderboard();
+  updateHUD();
+
+  requestAnimationFrame(loop);
+}
+
+canvas.addEventListener('mousemove', e=>{ mouse.x=e.clientX; mouse.y=e.clientY; });
+canvas.addEventListener('touchmove', e=>{ e.preventDefault(); mouse.x=e.touches[0].clientX; mouse.y=e.touches[0].clientY; },{passive:false});
+document.getElementById('name-input').addEventListener('keydown', e=>{ if(e.key==='Enter') startGame(); });
+</script>
+</body>
+</html>
