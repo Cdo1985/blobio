@@ -26,7 +26,7 @@
 <body>
 <div id="hud">
   <div class="lbl">MASS</div>
-  <div class="val" id="mass-val">100</div>
+  <div class="val" id="mass-val">500</div>
 </div>
 <div id="leaderboard">
   <h3>Leaderboard</h3>
@@ -113,9 +113,11 @@ function startGame() {
   blobs = [];
   for(let i=0;i<20;i++) blobs.push(spawnBot());
 
+  // UPDATED START MASS HERE
+  const startMass = 500; 
   player = {
     x: WORLD/2, y: WORLD/2,
-    mass: 100, r: massToRadius(100),
+    mass: startMass, r: massToRadius(startMass),
     color: '#4ade80',
     name: name,
     vx: 0, vy: 0,
@@ -128,7 +130,6 @@ function startGame() {
   loop();
 }
 
-// Spatial grid for perf
 function getCell(x,y) { return `${Math.floor(x/CELL_SIZE)},${Math.floor(y/CELL_SIZE)}`; }
 let foodGrid = {};
 function buildFoodGrid() {
@@ -162,7 +163,6 @@ function updateCamera() {
 
 function updatePlayer() {
   const p = player;
-  // Direction toward mouse (world coords)
   const wx = (mouse.x - W/2)/camera.scale + camera.x;
   const wy = (mouse.y - H/2)/camera.scale + camera.y;
   const dx = wx - p.x, dy = wy - p.y;
@@ -181,7 +181,6 @@ function updateBot(b) {
   b.thinkTimer--;
   if(b.thinkTimer <= 0) {
     b.thinkTimer = 30 + Math.random()*30;
-    // Find nearby food or smaller blobs
     let best = null, bestScore = -Infinity;
     const nearby = nearbyFoods(b.x,b.y,300);
     for(let f of nearby) {
@@ -189,7 +188,6 @@ function updateBot(b) {
       const score = 10/d;
       if(score>bestScore){bestScore=score;best={x:f.x,y:f.y};}
     }
-    // Chase smaller blobs
     for(let o of blobs) {
       if(o===b||!o.isPlayer&&o.mass>=b.mass*0.7) continue;
       if(o.mass < b.mass*0.85) {
@@ -198,7 +196,6 @@ function updateBot(b) {
         if(score>bestScore){bestScore=score;best={x:o.x,y:o.y};}
       }
     }
-    // Flee bigger blobs
     for(let o of blobs) {
       if(o===b) continue;
       if(o.mass > b.mass*1.15) {
@@ -250,7 +247,6 @@ function eatBlobs() {
         a.r = massToRadius(a.mass);
         dead.add(b);
         if(b.isPlayer) {
-          // Player eaten
           running = false;
           setTimeout(()=>{
             document.getElementById('death-msg').textContent = `Eaten by ${a.name}!`;
@@ -265,7 +261,6 @@ function eatBlobs() {
     }
   }
   blobs = blobs.filter(b=>!dead.has(b));
-  // Respawn bots
   while(blobs.filter(b=>!b.isPlayer).length < 19) blobs.push(spawnBot());
 }
 
@@ -275,7 +270,6 @@ function drawWorld() {
   ctx.scale(camera.scale, camera.scale);
   ctx.translate(-camera.x, -camera.y);
 
-  // Background grid
   const gridSize = 60;
   const startX = Math.floor((camera.x-W/camera.scale/2)/gridSize)*gridSize;
   const startY = Math.floor((camera.y-H/camera.scale/2)/gridSize)*gridSize;
@@ -287,11 +281,9 @@ function drawWorld() {
     ctx.beginPath();ctx.moveTo(startX,y);ctx.lineTo(startX+W/camera.scale+gridSize*2,y);ctx.stroke();
   }
 
-  // World border
   ctx.strokeStyle='rgba(255,255,255,0.15)'; ctx.lineWidth=6;
   ctx.strokeRect(0,0,WORLD,WORLD);
 
-  // Food
   const t=frameCount*0.05;
   for(let f of foods) {
     const pr=f.r*(0.85+0.15*Math.sin(t+f.pulse));
@@ -301,23 +293,18 @@ function drawWorld() {
   }
   ctx.shadowBlur=0;
 
-  // Blobs (sort by mass so smaller render on top)
   const sorted=[...blobs].sort((a,b)=>b.mass-a.mass);
   for(let b of sorted) {
-    // Glow
     ctx.shadowColor=b.color; ctx.shadowBlur=b.isPlayer?25:15;
-    // Body
     const g=ctx.createRadialGradient(b.x-b.r*0.3,b.y-b.r*0.35,b.r*0.1,b.x,b.y,b.r);
     g.addColorStop(0,lighten(b.color,60));
     g.addColorStop(0.6,b.color);
     g.addColorStop(1,darken(b.color,40));
     ctx.fillStyle=g;
     ctx.beginPath();ctx.arc(b.x,b.y,b.r,0,Math.PI*2);ctx.fill();
-    // Outline
     ctx.strokeStyle=darken(b.color,30); ctx.lineWidth=b.isPlayer?3:2;
     ctx.stroke();
     ctx.shadowBlur=0;
-    // Name + mass
     if(b.r>10) {
       const fs=Math.max(10,Math.min(b.r*0.4,24));
       ctx.fillStyle='rgba(0,0,0,0.7)';
@@ -375,7 +362,6 @@ function loop() {
   eatBlobs();
   updateCamera();
 
-  // Draw
   ctx.fillStyle='#0d0d0d';
   ctx.fillRect(0,0,W,H);
   drawWorld();
